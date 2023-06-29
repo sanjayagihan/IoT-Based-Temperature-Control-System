@@ -1,5 +1,7 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
 
 // motor controller - l298n
 // https://microcontrollerslab.com/l298n-dc-motor-driver-module-esp8266-nodemcu/
@@ -22,6 +24,13 @@ int scada_temperature = 100;
 int ENA = D7;
 int IN1 = D1;
 int IN2 = D2;
+
+// NTPClient - to get date time
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org");
+
+// Fan switch
+char fanSwitch = 'f';
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -60,12 +69,14 @@ void callback(char* topic, byte* payload, unsigned int length) {
     Serial.println("Fan switched ON");
     Serial.print("Obtained value: ");
     Serial.println((char)payload[0]);
+    fanSwitch = 't';
   } else if (payload[0] == 'f') {
     // Switch off the fan
     // digitalWrite(D1, LOW);
     Serial.println("Fan switched OFF");
     Serial.print("Obtained value: ");
     Serial.println((char)payload[0]);
+    fanSwitch = 'f';
   } else {
       scada_temperature = atoi((char *)payload);
       Serial.println(scada_temperature);
@@ -81,10 +92,10 @@ void reconnect() {
     if (client.connect("client01")) {
       Serial.println("connected");
       // Once connected, publish an announcement...
-      client.publish("temperature_output", "Connected...");
+      // client.publish("UoP_CO_326_E18_Gr12_LM35", "Connected...");
       // ... and resubscribe
-      client.subscribe("temperature_input");
-      client.subscribe("fan_input");
+      client.subscribe("UoP_CO_326_E18_Gr12_LM35_Threshold");
+      client.subscribe("UoP_CO_326_E18_Gr12_Fan_Switch");
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -112,9 +123,13 @@ void setup() {
   client.setServer(mqtt_server, 1883);
   // Set callback function for incoming MQTT messages
   client.setCallback(callback);
+  // Initialize a NTPClient to get time
+  timeClient.begin();
+  timeClient.setTimeOffset(0);
 }
 
-
+// temperature_output -> UoP_CO_326_E18_Gr12_LM35
+// time_data -> UoP_CO_326_E18_Gr12_Time
 
 void loop() {
   if (!client.connected()) {
@@ -129,14 +144,21 @@ void loop() {
   analogValue = analogRead(outputpin);
   millivolts = (analogValue/1024.0) * 3300; //3300 is the voltage provided by NodeMCU
   celsius = millivolts/10;
+  // getting time
+  timeClient.update();
+  time_t epochTime = timeClient.getEpochTime();
+  Serial.print("Epoch Time: ");
+  Serial.println(epochTime);
   // Create a message with a value that increments each time
   snprintf(msg, MSG_BUFFER_SIZE, "%f", celsius);
   Serial.print("Publish message: ");
   Serial.println(msg);
-  // Publish the message to the topic "temperature_output"
-  client.publish("temperature_output", msg);
+  // Publish the message to the topic "UoP_CO_326_E18_Gr12_LM35"
+  char* timeData = ctime(&epochTime);
+  client.publish("UoP_CO_326_E18_Gr12_Time",timeData);
+  client.publish("UoP_CO_326_E18_Gr12_LM35_Output", msg);
   }
-  if(scada_temperature<celsius){
+  if(scada_temperature<celsius && fanSwitch=='t'){
     startFan();
   }else{
     stopFan();
@@ -146,6 +168,7 @@ void loop() {
 
 void startFan(){
   analogWrite(ENA, 255);
+
   digitalWrite(IN1, HIGH);
   digitalWrite(IN2, LOW);
 }
